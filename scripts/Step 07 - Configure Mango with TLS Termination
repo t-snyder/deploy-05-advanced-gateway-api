@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# Step 7. Performs the following deployments and configurations:
+#           a) Create a namespace for the mango deployment
+#           b) Create and configure a Vault Issuer and role for mango certificates
+#           c) Create a vault authorization role for the mango issuer
+#           d) Deploy cert-manager Service Account, Role and Rolebindings for the issuer
+#           e) Deploy a cert-manager issuer configured to the vault mango-issuer
+#           f) Deploy a cert-manager certificate for mango tls using vault mango issuer
+#           g) Deploy mango gateway and app
+#           h) Obtain mango host, ports, and tls credentials
+#           i) Test access via tls terminated at the gateway but with mtls within cluster.
+
+# Create the mango namespace
+kubectl create namespace mango
+
+# Create mango-issuer role
+kubectl exec -n vault vault-0 -i -- vault write pki_int/roles/mango-issuer allowed_domains=mango.example.com allow_subdomains=true allow_bare_domains=true allow_any_name=true max_ttl=48h key_type=ec key_bits=256
+
+# Set the policy for the mango-issuer role
+kubectl exec -n vault vault-0 -i -- vault policy write mango-issuer - <<EOF
+path "pki_int*"                     { capabilities = ["read", "list"] }
+path "pki_int/roles/mango-issuer"   { capabilities = ["create", "update"] }
+path "pki_int/sign/mango-issuer"    { capabilities = ["create", "update"] }
+path "pki_int/issue/mango-issuer"   { capabilities = ["create"] }
+EOF
+
+# Create an Authentication Role for the Mango Issuer
+kubectl exec -it vault-0 -n vault -- vault write auth/kubernetes/role/mango-issuer \
+    bound_service_account_names=mango-issuer \
+    bound_service_account_namespaces=mango \
+    audience="vault://mango/mango-issuer" \
+    policies=mango-issuer \
+    ttl=20d
+
+# Read the vault.ca into a variable for substitution into vault-issuer.yaml
+VAULT_CA=$(cat ${PROTODIR}/gen/crypto/vault.ca | base64 | tr -d '\n')
+echo $VAULT_CA
+
+# Deploy the cert-manager service account, role and role binding for the mango-issuer
+kubectl apply -f $PROTODIR/kube/mango-issuer-sa-role.yaml
+
+# Deploy the mango issuer
+kubectl apply -f- <<EOF
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mango-issuer
+  namespace: mango
+spec:
+  vault:
+    path: pki_int/sign/mango-issuer
+    server: https://vault.vault.svc.cluster.local:8200
+    caBundle: $VAULT_CA
+    auth:
+      kubernetes:
+        role: mango-issuer
+        mountPath: /v1/auth/kubernetes
+        serviceAccountRef:
+          name: mango-issuer
+EOF
+
+# Generate the mango cert
+kubectl apply -f- <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mango-credential
+  namespace: mango 
+spec:
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  commonName: mango.example.com
+  dnsNames:
+    - localhost
+    - mango
+    - mango.mango.svc.cluster.local
+    - mango.example.com
+  ipAddresses:
+    - 127.0.0.1
+  secretName: mango-credential
+  issuerRef:
+    name: mango-issuer
+EOF
+
+# Deploy Mango Gateway - Cert, Gateway and HttpRoute
+kubectl apply -n mango -f ${PROTODIR}/kube/mango-gateway.yaml
+
+# Deploy Mango app - http echo
+kubectl apply -n mango -f ${PROTODIR}/kube/mango.yaml
+
+# Set mango namespace to istio ambient mode (ie. no sidecar)
+kubectl label namespace mango istio.io/dataplane-mode=ambient
+
+export MANGO_INGRESS_HOST=$(kubectl get gtw mango-gateway -n mango -o jsonpath='{.status.addresses[0].value}')
+export MANGO_HTTP_PORT=$(kubectl    get gtw mango-gateway -n mango -o jsonpath='{.spec.listeners[?(@.name=="http")].port}')
+export MANGO_HTTPS_PORT=$(kubectl   get gtw mango-gateway -n mango -o jsonpath='{.spec.listeners[?(@.name=="https")].port}')
+
+echo "MANGO_INGRESS_HOST = $MANGO_INGRESS_HOST"
+echo "MANGO_HTTP_PORT    = $MANGO_HTTP_PORT"
+echo "MANGO_HTTPS_PORT   = $MANGO_HTTPS_PORT"
+
+# Obtain mango tls credential
+kubectl get secret mango-credential -n mango -o "jsonpath={.data['ca\.crt']}" | base64 -d > $PROTODIR/gen/crypto/mango-tls.crt
+
+# Test https - Should return "juicy mango"
+curl -vt -HHost:mango.example.com --resolve "mango.example.com:$MANGO_HTTPS_PORT:$MANGO_INGRESS_HOST" \
+  --cacert $PROTODIR/gen/crypto/mango-tls.crt "https://mango.example.com:$MANGO_HTTPS_PORT/mango"
+
+
+
+

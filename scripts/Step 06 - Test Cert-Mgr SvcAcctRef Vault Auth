@@ -1,0 +1,103 @@
+#!/bin/bash
+
+############# https://developer.hashicorp.com/vault/tutorials/archive/kubernetes-cert-manager
+############# https://github.com/cert-manager/cert-manager/pull/5502 - new serviceaccountref
+
+# Create vault-issuer role
+kubectl exec -n vault vault-0 -i -- vault write pki/roles/vault-issuer allowed_domains=cluster.local allow_subdomains=true max_ttl=48h key_type=ec key_bits=256
+
+# Configure Policy for vault-issuer signing
+kubectl exec -n vault vault-0 -i -- vault policy write vault-issuer - <<EOF
+path "pki*"                 { capabilities = ["read", "list"] }
+path "pki/roles/vault-issuer"   { capabilities = ["create", "update"] }
+path "pki/sign/vault-issuer"    { capabilities = ["create", "update"] }
+path "pki/issue/vault-issuer"   { capabilities = ["create"] }
+EOF
+
+# Configure vault-issuer vault role
+kubectl exec -n vault vault-0 -i -- vault write auth/kubernetes/role/vault-issuer \
+   bound_service_account_names=vault-issuer \
+   bound_service_account_namespaces=default \
+   audience=vault://default/vault-issuer \
+   policies=vault-issuer \
+   ttl=1m
+
+# Read the vault.ca into a variable for substitution into vault-issuer.yaml
+VAULT_CA=$(cat ${PROTODIR}/gen/crypto/vault.ca | base64 | tr -d '\n')
+echo $VAULT_CA
+
+kubectl apply -f- <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-issuer
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-issuer
+  namespace: default
+rules:
+  - apiGroups: ['']
+    resources: ['serviceaccounts/token']
+    resourceNames: ['vault-issuer']
+    verbs: ['create']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-issuer
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vault-issuer
+  namespace: default
+spec:
+  vault:
+    path: pki/sign/vault-issuer
+    server: https://vault.vault.svc.cluster.local:8200
+    caBundle: $VAULT_CA
+    auth:
+      kubernetes:
+        role: vault-issuer
+        mountPath: /v1/auth/kubernetes
+        serviceAccountRef:
+          name: vault-issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: example-com
+spec:
+  secretName: example-com-tls
+  issuerRef:
+    name: vault-issuer
+  commonName: example.cluster.local
+  dnsNames:
+  - example.cluster.local
+  privateKey:
+    algorithm: ECDSA
+EOF
+
+# Check that vault-issuer has not errors
+kubectl describe issuer vault-issuer
+
+# Check that example-com cert was successfully issued
+kubectl describe certificate example-com
+
+############################################################################
+######### The end if Testing the SErviceAccountRef functionality of Cert-Manager
+######### for providing kubernetes auth to Vault for certificate signing.
+###################################################################################
+

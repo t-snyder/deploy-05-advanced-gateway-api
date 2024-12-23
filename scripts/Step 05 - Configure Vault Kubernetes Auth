@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# Configure Vault Kubernetes ServiceAccountRef Auth
+
+kubectl exec -it -n vault vault-0 -n vault -- vault auth enable kubernetes
+
+kubectl exec -n vault vault-0 -i -- sh -c 'vault write auth/kubernetes/config \
+   token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+   kubernetes_host="https://$KUBERNETES_PORT_443_TCP_ADDR:443" \
+   kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+   issuer=https://kubernetes.default.svc.cluster.local'
+
+# End of Vault Kubernetes Auth Configuration - Go to Step 06

@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# These steps incorporate the steps necessary to set up Vault as a Root and Intermediate
+# CA, and finally generate a Certificate
+#
+# See Vault Doc for more info ( Build your own certificate authority (CA):
+#    https://developer.hashicorp.com/vault/tutorials/secrets-management/pki-engine
+#
+# These steps make use of the Vault UI. The main reason is that I could get it to work correctly
+# and the kubectl and vault cli steps ended up generating errors with certificate generation. 
+# As I had a working solution I decided I did not have time to trouble shoot the other options.
+#
+# When these UI steps are used to generate the Root and Intermediate Certs and Roles then
+# the final step of generating Certificates work with both the kubectl / vault cli as
+# well as curl.
+
+# Deploy admin policy to vault
+cat ${PROTODIR}/policy/adminPolicy.hcl | kubectl exec -i -n vault vault-0 -- vault policy write admin -
+
+#List deployed policies
+kubectl exec -it -n vault vault-0 -- vault policy list
+
+#Read admin policy
+kubectl exec -it -n vault vault-0 -- vault policy read admin
+
+#Create an admin token
+ADMIN_TOKEN=$(kubectl exec -it -n vault vault-0 -- vault token create -format=json -policy="admin" | jq -r ".auth.client_token")
+
+#print out token
+echo $ADMIN_TOKEN
+
+#Retrieve token capabilities - Optional validation
+kubectl exec -it -n vault vault-0 -- vault token capabilities $ADMIN_TOKEN sys/auth/approle
+
+# Below is the vault ui url for logging into vault. Using the UI is the only option I
+# found that would successfully complete the necessary tasks. Within the kubectl 
+# command steps below I have indicated where I started receiving errors. All of the 
+# commands are successful, except when trying to generate a new certificate at the final 
+# step.
+#
+# Also the browser is going to complain about the self signed cert for the UI. Just
+# accept.
+#
+# https://127.0.0.1:8200/ui
+#
+# Login with the ADMIN_TOKEN above which has been displayed in the terminal via the echo 
+# command. 
+#
+# *** Note if you receive an authentication error msg when first accessing the vault UI,
+# and you have logged into Vault UI before, follow the instructtions below to remove the 
+# prior token which is no longer valid.
+# 
+# Login token reset - go to the Person icon and then select Revoke token, confirm, and 
+# then select Logout. This removes the prior token. 
+# This will give you a screen to enter the new ADMIN_TOKEN generated above.
+# 
+# Step 1. Generate Root CA
+# At the Dashboard
+#    Select Details next to the Secrets engines
+#    Select enable new engine
+#    Select PKI Certificates
+#    Keep Path as 'pki'
+#    Set Max Lease TTL to 87600 hours
+#    Submit Enable engine
+#
+#    On the pki Overview Tab it will complain that the PKI is not configured.
+#    Select Configure PKI
+#    Select Generate Root
+#    On Root parameters - 
+#      Type - select internal
+#      Common name - example.com
+#      Issuer name - root-2025
+#      Not valid after - TTL 87600 hours
+#      Within the Issuer URLs
+#        Issuing certificates    - https://vault.vault:8200/v1/pki/ca
+#        CRL distribution points - https://vault.vault:8200/v1/pki/crl
+#        OCSP Servers            - https://vault.vault:8200/v1/ocsp    
+#    Select Done
+#
+#    The View Root Certificate Screen appears. Next to the Certificate Pem Format
+#      Select the Copy icon to copy the cert to the clipboard.
+#      Save the copied cert as root_2025_ca.crt ( In $PROTODIR/gen/crypto is a good place )
+#
+#    Return to the Dashboard screen
+#
+#    Add a Role for the root CA - Select pki -> Roles (The Tab) -> Create Role
+#      Role Name - 2025-servers
+#      Select Create
+# 
+#    Note you can verify and review the cert information with 
+#    openssl x509 -in ${WORKDIR}/crypto/root_2025_ca.crt -text 
+#  
+# Step 2. Generate Intermediate CA
+#    Select Secrets Engines on left and then Enable new engine
+#    Select PKI Certificates
+#      Path - pki_int
+#      Max lease TTL - 43800 hours
+#      Select Enable Engine 
+#
+#    The pki_int Overview screen will complain that the pki is not configured.    
+#    Select Configure PKI
+#    Select Generate Intermediate CSR
+#      Type - internal
+#      Common Name - example.com Intermediate Authority
+#      Select Generate
+#    On View Generated CSR 
+#      Select the copy icon next to the CSR Pem and copy to clipboard.
+#      Save the pem file as pki_intermediate.csr ($PROTODIR/gen/csr a good place)
+#
+#    Now we need to sign the CSR with the Root CA.
+#    Return to Dashboard - select pki Secrets engine -> Select Issuers tab
+#    Select root-2025 issuer
+#    Select Sign Intermediate tab
+#      Paste Pem CSR into CSR field
+#      Common name - example.com
+#      Format      - pem_bundle
+#      Select Save to sign
+#
+#    Copy Certificate via copy icon. Save to intermediate_ca.crt
+#    Copy and save Issuing CA and CA Chain
+#
+#    Go to Dashboard -> select pki_int from Secrets engines
+#    Select Configure PKI
+#    Select Import a CA
+#    PEM Bundle - Browse to and select the intermediate_ca.crt file you saved.
+#    Select Import Issuer
+#    Select Done
+#
+# Step 3. Create a Role
+#    First list the pki_int issuers. Note the issuer id for the intermediate issuer
+#  
+#    From Dashboard -> pki_int -> Roles (View roles) -> Create Role
+#    On Create a PKI Role 
+#     Role name - example-dot-com
+#     Toggle off the Use default Issuer
+#       Select the issuer (intermediate) with the id noted above
+#     Under Not valid after enter TTL - 43800 hours
+#     Expand Domain Handling
+#       In Allowed domains enter - example.com
+#       Turn on Allow subdomains
+#       Select Create
+#
+# Step 4. Request Certificates
+#    From Dashboard -> select pki_int -> Roles (View Roles) -> example-dot-com
+#    Select the Generate certificate tab
+#       Common name - test.example.com
+#       Under Not Valid after - set TTL 24 hours
+#       Select Generate
+
+################################################################################
+# Test Request Certificates from Intermediate CA
+kubectl exec -it -n vault vault-0 -- vault write pki_int/issue/example-dot-com common_name="test2.example.com" ttl="24h"     
+
+# This curl command is an alternative to the above. If using it remember the 
+# string substitution.
+curl --cacert $PROTODIR/gen/crypto/vault.ca \
+     --header "X-Vault-Token: ${ADMIN_TOKEN}" \
+     --request POST \
+     --data '{"common_name": "test3.example.com", "ttl": "24h"}' \
+     https://127.0.0.1:8200/v1/pki_int/issue/example-dot-com | jq
+     
+# This Step 4. is now complete.       
+

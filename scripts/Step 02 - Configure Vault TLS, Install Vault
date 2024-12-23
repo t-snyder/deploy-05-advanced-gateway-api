@@ -1,0 +1,83 @@
+#!/bin/bash
+
+#Steps from Install Vault to minikube with TLS enabled
+#https://developer.hashicorp.com/vault/tutorials/kubernetes/kubernetes-minikube-tls
+
+# Step 02 - Within this step we will perform the following:
+#            a) Create the vault keys
+#            b) Create a csr (certificate signing request)
+#            c) Kubernetes sign the certificate 
+#            d) Kubernetes approve the certificate 
+#            e) Create the vault namespace
+#            f) Create a secret from the private key, certficate and CA certificate
+#            g) Install vault            
+
+export SERVICE_NAME=vault-internal
+export NAMESPACE=vault
+export SECRET_NAME=vault-tls
+export PROTODIR=/media/tim/ExtraDrive1/Projects/learn-lb-gtw-vault-istio-certmgr
+export CSR_NAME=vault.svc
+export VAULT_HELM_RELEASE_NAME="vault"
+export K8S_CLUSTER_NAME="cluster.local"
+
+# Create directories if they do not exist
+mkdir -p $PROTODIR/gen/crypto
+mkdir -p $PROTODIR/gen/csr
+
+#create key for kubernetes to sign
+openssl genrsa -out ${PROTODIR}/gen/crypto/vault.key 2048
+
+#Create the csr from csr.conf
+openssl req -new -key ${PROTODIR}/gen/crypto/vault.key -out ${PROTODIR}/gen/csr/vault.csr -config ${PROTODIR}/conf/vault-csr.conf
+
+#Send the csr to kubernetes using csr.yaml 
+#*** Note - The cat below is used for substituting the base64 csr into 
+# the csr.yaml file. This must be done prior to invoking the kubectl create.
+cat > ${PROTODIR}/kube/csr.yaml <<EOF
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: vault.svc
+spec:
+  signerName: kubernetes.io/kubelet-serving
+  expirationSeconds: 8640000
+  request: $(cat ${PROTODIR}/gen/csr/vault.csr|base64|tr -d '\n')
+  usages:
+  - digital signature
+  - key encipherment
+  - server auth
+EOF
+
+kubectl create -f ${PROTODIR}/kube/csr.yaml
+
+#Approve csr
+kubectl certificate approve vault.svc
+
+#Verify it was created - Looking for condition Approved, Issued
+kubectl get csr vault.svc
+
+#Retrieve newly created cert
+kubectl get csr vault.svc -o jsonpath='{.status.certificate}' | openssl base64 -d -A -out ${PROTODIR}/gen/crypto/vault.crt
+
+#Retrieve kubernetes CA cert
+kubectl get cm kube-root-ca.crt -o jsonpath="{['data']['ca\.crt']}" > $PROTODIR/gen/crypto/vault.ca
+
+#Create vault namespace
+kubectl create namespace ${NAMESPACE}
+
+#Store the key into a secret
+kubectl create secret generic ${SECRET_NAME} \
+    --namespace ${NAMESPACE} \
+    --from-file=vault.key=${PROTODIR}/gen/crypto/vault.key \
+    --from-file=vault.crt=${PROTODIR}/gen/crypto/vault.crt \
+    --from-file=vault.ca=${PROTODIR}/gen/crypto/vault.ca
+
+#########################################################################
+#Deploy vault
+helm install vault hashicorp/vault -n vault -f ${PROTODIR}/kube/vault-tls.yaml
+
+# The initial deployment of vault is now complete. It takes approx 1 minute for the
+# deployment to be ready before you can proceed with the steps in 
+# Step-3-deployVaultSetup.sh
+
+        
