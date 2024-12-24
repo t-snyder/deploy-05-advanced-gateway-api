@@ -11,19 +11,19 @@
 kubectl -n vault get pods
 
 # Note - proceed when vault-0 is up and ready
-#Initialize vault-0 with 1 keyshare and 1 key threshhold
+# Initialize vault-0 with 1 keyshare and 1 key threshhold
 kubectl exec -it -n vault vault-0 -- vault operator init \
     -key-shares=1 \
     -key-threshold=1 \
     -format=json > ${PROTODIR}/gen/crypto/cluster-keys.json   
 
-#Display the unseal key
+# Display the unseal key
 jq -r ".unseal_keys_b64[]" ${PROTODIR}/gen/crypto/cluster-keys.json
 
-#Create env variable for the key
+# Create env variable for the key
 VAULT_UNSEAL_KEY=$(jq -r ".unseal_keys_b64[]" ${PROTODIR}/gen/crypto/cluster-keys.json) 
  
-#Unseal vault-0
+# Unseal vault-0
 kubectl exec -n vault vault-0 -- vault operator unseal $VAULT_UNSEAL_KEY 
 
 #Join Vault-1
@@ -51,17 +51,17 @@ export CLUSTER_ROOT_TOKEN=$(cat ${PROTODIR}/gen/crypto/cluster-keys.json | jq -r
 kubectl exec -n vault vault-0 -- vault login $CLUSTER_ROOT_TOKEN
 
 ############# Validate Vault setup #######################################
-#List the raft peers
+# List the raft peers
 kubectl exec -n vault vault-0 -- vault operator raft list-peers
 
-#Review HA status
+# Review HA status
 kubectl exec -n vault vault-0 -- vault status
 
 ######### Test the vault setup by creating a new secrets engine and secret ################
-#Enable instance of kv-v2 secrets engine
+# Enable instance of kv-v2 secrets engine
 kubectl exec -it -n vault vault-0 -- vault secrets enable -path=secret kv-v2
 
-#Create secrets path - username and password from 
+# Create secrets path - username and password from 
 kubectl exec -it -n vault vault-0 -- vault kv put secret/test/apitest username="apiuser" password="supersecret"
 
 #verify secret defi
