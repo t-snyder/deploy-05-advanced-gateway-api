@@ -46,6 +46,9 @@ particular OS.
   
    
 ## Prototype Script Functionality
+**Note :**<br>
+*The commands within the shell files below are meant to be copy pasted (one or a few lines at a time) into a terminal, and not run as an automated bash script.*
+
 
 ### Step 01-Deploy Minikube, metallb, Gateway API CRDs, Istio, Cert-Manager
 This script deploys the following:
