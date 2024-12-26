@@ -1,9 +1,9 @@
 # Learn-05-Advanced-Gateway-API
 
 ## Project Purpose
-Deploy functional prototype using Kubernetes Gateway API TLS Termination and Passthru 
-ingress functionality using Istio (Ambient Mode), Cert-Manager and Hashicorp Vault for
-managing and signing TLS certificates within a Minikube environment.
+Deploys a functional prototype using Kubernetes Gateway API supporting TLS Termination and Passthru 
+ingress functionality. Built using Istio (Ambient Mode), Cert-Manager and Hashicorp Vault for
+certificate lifecycle management and signing TLS certificates within a Minikube environment.
 
 ## Project Dependencies
 | Core Infrastructure | Version         |
