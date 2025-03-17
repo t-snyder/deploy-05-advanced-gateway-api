@@ -6,7 +6,7 @@
 
 #Vault internal setup commands - join, unseal. create kv-v2
 
-# Verify deployment - Before moving past this step Wait until the pods status is running. 
+# Verify deployment - Before moving past this step Wait until the pods status STATUS=Running. 
 # Note the vault pods will show READY = 0/1 until the unsealing and joining has been performed.
 kubectl -n vault get pods
 

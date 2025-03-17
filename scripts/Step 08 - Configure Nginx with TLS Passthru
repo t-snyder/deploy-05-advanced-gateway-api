@@ -17,7 +17,7 @@ kubectl create namespace nginx
 # Create mango-issuer role
 kubectl exec -n vault vault-0 -i -- vault write pki_int/roles/nginx-issuer allowed_domains=nginx.example.com allow_subdomains=true allow_bare_domains=true allow_any_name=true max_ttl=48h key_type=ec key_bits=256
 
-# Set the policy for the mango-issuer role
+# Set the policy for the nginx-issuer role
 kubectl exec -n vault vault-0 -i -- vault policy write nginx-issuer - <<EOF
 path "pki_int*"                     { capabilities = ["read", "list"] }
 path "pki_int/roles/nginx-issuer"   { capabilities = ["create", "update"] }
@@ -97,8 +97,8 @@ kubectl get pods -n nginx
 kubectl apply -n nginx -f $PROTODIR/kube/nginx-gateway.yaml
 
 # Check the status - wait until the Address is available and PROGRAMMED=True
-kubectl get gateway -n nginx
 kubectl wait --for=condition=programmed gtw nginx-gateway -n nginx
+kubectl get gateway -n nginx
 
 # Set nginx namespace to istio ambient mode (ie. no sidecar)
 kubectl label namespace nginx istio.io/dataplane-mode=ambient

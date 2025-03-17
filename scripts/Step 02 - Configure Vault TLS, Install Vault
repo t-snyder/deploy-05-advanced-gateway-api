@@ -15,10 +15,11 @@
 export SERVICE_NAME=vault-internal
 export NAMESPACE=vault
 export SECRET_NAME=vault-tls
-export PROTODIR=/media/tim/ExtraDrive1/Projects/learn-05-advanced-gateway-api
 export CSR_NAME=vault.svc
 export VAULT_HELM_RELEASE_NAME="vault"
 export K8S_CLUSTER_NAME="cluster.local"
+
+export PROTODIR=/media/tim/ExtraDrive1/Projects/deploy-05-advanced-gateway-api
 
 # Create directories if they do not exist
 mkdir -p $PROTODIR/gen/crypto
